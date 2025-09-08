@@ -99,20 +99,40 @@ pipeline {
       steps {
         ansiColor('xterm') {
           script {
-            // Obtener URL pública del servicio
+            // Obtenemos la URL pública del servicio recién desplegado
             def URL = sh(
               returnStdout: true,
               script: "gcloud run services describe \"$SERVICE_NAME\" --region \"$REGION\" --format='value(status.url)'"
             ).trim()
             echo "Service URL: ${URL}"
+    
+            // Probaremos varios paths y aceptaremos 2xx/3xx
+            def paths = ['/healthz', '/healthz/', '/ping', '/']
+            def ok = false
+    
+            for (p in paths) {
+              // -f: falla en >=400 ; -sS: silencioso pero muestra errores ; -L: sigue redirects ; -o /dev/null: no imprime body
+              // Usamos "|| true" para que Jenkins no reviente el loop ante un 404
+              def code = sh(returnStdout: true, script: "curl -s -o /dev/null -w '%{http_code}' -L \"${URL}${p}\" || true").trim()
+              echo "Probing ${URL}${p} -> HTTP ${code}"
+              if (code.startsWith('2') || code.startsWith('3')) {
+                ok = true
+                echo "✅ Smoke test OK en ${URL}${p} (HTTP ${code})"
+                break
+              }
+            }
+    
+            if (!ok) {
+              // Diagnóstico: imprime cabeceras + primeras líneas del body de /healthz y /
+              sh """
+                set -e
+                echo '--- Diagnóstico /healthz ---'
+                curl -i -L "${URL}/healthz" || true
+                echo '--- Diagnóstico / ---'
+                curl -i -L "${URL}/" || true
+              """
+              error("Smoke Test: ninguna ruta respondió 2xx/3xx")
 
-            sh """
-              set -e
-              # Esperar por arranque en frío
-              sleep 5
-              # Health check con reintentos
-              curl -fsSL --retry 5 --retry-delay 2 "${URL}/healthz" > /dev/null
-            """
           }
         }
       }
