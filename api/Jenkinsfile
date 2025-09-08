@@ -1,118 +1,108 @@
-// Tu Jenkinsfile está excelente, aquí explico cada parte:
-
 pipeline {
-  agent any  // Ejecutar en cualquier agente disponible
-  
-  // Variables de entorno que usa todo el pipeline
+  agent any
+
   environment {
-    PROJECT_ID   = credentials('gcp-project-id')  // ID del proyecto desde Jenkins secrets
-    REGION       = 'us-east1'           // Región de US (más barata)
-    REPO_NAME    = 'apps'                         // Nombre del repositorio de Docker
-    SERVICE_NAME = 'fastapi-demo'                 // Nombre del servicio en Cloud Run
-    REGISTRY_HOST = "${REGION}-docker.pkg.dev"    // Host del registro de contenedores
+    PROJECT_ID    = credentials('gcp-project-id') // Secret text
+    REGION        = 'us-east1'
+    REPO_NAME     = 'apps'
+    SERVICE_NAME  = 'fastapi-demo'
+    REGISTRY_HOST = "us-east1-docker.pkg.dev"     // host del Artifact Registry (ajusta si cambias región)
   }
-  
-  // Opciones del pipeline
+
   options {
-    timestamps()           // Mostrar timestamps en logs
-    ansiColor('xterm')    // Colores en la consola
+    timestamps()
+    ansiColor('xterm')
   }
-  
+
   stages {
-    // ETAPA 1: Descargar código fuente
+
     stage('Checkout') {
       steps {
-        checkout scm  // scm = Source Code Management (Git)
+        checkout scm
+        sh 'git rev-parse --abbrev-ref HEAD && git log -1 --oneline || true'
       }
     }
-    
-    // ETAPA 2: Autenticación con Google Cloud
+
     stage('GCloud Auth') {
       steps {
-        // Usar las credenciales de service account almacenadas en Jenkins
         withCredentials([file(credentialsId: 'gcp-sa-key', variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
           sh '''
-            # Activar service account con el archivo de credenciales
+            set -e
             gcloud auth activate-service-account --key-file="$GOOGLE_APPLICATION_CREDENTIALS"
-            
-            # Configurar el proyecto por defecto
-            gcloud config set project ${PROJECT_ID}
-            
-            # Configurar Docker para usar Artifact Registry
-            gcloud auth configure-docker ${REGISTRY_HOST} -q
+            gcloud config set project "$PROJECT_ID"
+            gcloud --quiet auth configure-docker "$REGISTRY_HOST"
           '''
         }
       }
     }
-    
-    // ETAPA 3: Construir y subir imagen Docker
+
     stage('Build & Push Image') {
       steps {
-        script {
-          // Obtener hash corto del commit actual (para versioning)
-          def COMMIT = sh(returnStdout: true, script: 'git rev-parse --short HEAD').trim()
-          
-          // Crear URLs de las imágenes (con tag específico y 'latest')
-          env.IMAGE = "${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO_NAME}/${SERVICE_NAME}:${COMMIT}"
-          env.IMAGE_LATEST = "${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO_NAME}/${SERVICE_NAME}:latest"
+        dir('api') {
+          script {
+            def COMMIT = sh(returnStdout: true, script: 'git rev-parse --short HEAD').trim()
+            env.IMAGE        = "$REGION-docker.pkg.dev/$PROJECT_ID/$REPO_NAME/$SERVICE_NAME:$COMMIT"
+            env.IMAGE_LATEST = "$REGION-docker.pkg.dev/$PROJECT_ID/$REPO_NAME/$SERVICE_NAME:latest"
+          }
+          sh '''
+            set -e
+            # Construir con dos tags
+            docker build -t "$IMAGE" -t "$IMAGE_LATEST" .
+            # Push de ambas etiquetas
+            docker push "$IMAGE"
+            docker push "$IMAGE_LATEST"
+          '''
         }
-        sh '''
-          # Construir imagen con dos tags: commit específico y 'latest'
-          docker build -t "${IMAGE}" -t "${IMAGE_LATEST}" .
-          
-          # Subir ambas imágenes al registry
-          docker push "${IMAGE}"
-          docker push "${IMAGE_LATEST}"
-        '''
       }
     }
-    
-    // ETAPA 4: Desplegar en Cloud Run
+
     stage('Deploy to Cloud Run') {
       steps {
         sh '''
-          # Desplegar servicio en Cloud Run
-          gcloud run deploy ${SERVICE_NAME} \
-            --image ${IMAGE} \                    # Imagen a desplegar
-            --platform managed \                 # Cloud Run completamente gestionado
-            --region ${REGION} \                 # Región donde desplegar
-            --allow-unauthenticated \            # Permitir tráfico público
-            --port 8000                          # Puerto interno del contenedor
+          set -e
+          # Despliegue (sin comentarios al final de líneas con '\')
+          gcloud run deploy "$SERVICE_NAME" \
+            --image "$IMAGE" \
+            --platform managed \
+            --region "$REGION" \
+            --allow-unauthenticated \
+            --port 8000
         '''
       }
     }
-    
-    // ETAPA 5: Verificar que el despliegue funciona
+
     stage('Smoke Test') {
       steps {
         script {
-          // Obtener URL del servicio desplegado
-          def URL = sh(returnStdout: true, script: "gcloud run services describe ${SERVICE_NAME} --region ${REGION} --format='value(status.url)'").trim()
+          def URL = sh(
+            returnStdout: true,
+            script: "gcloud run services describe \"$SERVICE_NAME\" --region \"$REGION\" --format='value(status.url)'"
+          ).trim()
           echo "Service URL: ${URL}"
-          
           sh """
-            # Esperar que el servicio esté listo
+            set -e
+            # pequeño delay para arranque en frío
             sleep 5
-            
-            # Probar endpoint de salud
-            curl -fsS ${URL}/healthz
+            # prueba de salud con reintentos
+            curl -fsSL --retry 5 --retry-delay 2 "${URL}/healthz" > /dev/null
           """
         }
       }
     }
   }
-  
-  // Acciones después del pipeline
+
   post {
     success {
       script {
-        // Mostrar URL del servicio cuando todo sale bien
-        def url = sh(returnStdout: true, script: "gcloud run services describe ${SERVICE_NAME} --region ${REGION} --format='value(status.url)'").trim()
+        def url = sh(
+          returnStdout: true,
+          script: "gcloud run services describe \"$SERVICE_NAME\" --region \"$REGION\" --format='value(status.url)'"
+        ).trim()
         echo "✅ Despliegue exitoso: ${url}"
       }
     }
     failure {
-      echo "❌ Pipeline falló. Revisar logs para identificar el problema."
+      echo "❌ Pipeline falló. Revisa logs."
     }
   }
 }
