@@ -1,0 +1,4 @@
+# Tus dependencias están perfectas y actualizadas:
+fastapi==0.115.0    # Framework web
+uvicorn==0.30.6     # Servidor ASGI (maneja peticiones HTTP)
+pydantic==2.9.2     # Validación y serialización de datos
