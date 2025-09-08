@@ -1,91 +1,119 @@
+// Jenkinsfile (api/Jenkinsfile)
+// Correcciones clave:
+// 1) NO usar ansiColor en options{} -> mover a wrapper de steps: ansiColor('xterm') { ... }
+// 2) Mantener comentarios fuera de líneas que terminan en '\' (bash)
+// 3) Usar $VAR (shell) dentro de sh ''' ... ''' para evitar interpolación Groovy accidental
+
 pipeline {
   agent any
 
   environment {
-    PROJECT_ID    = credentials('gcp-project-id') // Secret text
+    PROJECT_ID    = credentials('gcp-project-id') // Secret text en Jenkins
     REGION        = 'us-east1'
     REPO_NAME     = 'apps'
     SERVICE_NAME  = 'fastapi-demo'
-    REGISTRY_HOST = "us-east1-docker.pkg.dev"     // host del Artifact Registry (ajusta si cambias región)
+    REGISTRY_HOST = "us-east1-docker.pkg.dev"     // Host de Artifact Registry (ajusta si cambias región)
   }
 
   options {
-    timestamps()
-    ansiColor('xterm')
+    timestamps()          // ✅ esto sí va en options
+    // ❌ ansiColor NO va aquí; úsalo como wrapper en steps (ver abajo)
   }
 
   stages {
 
     stage('Checkout') {
       steps {
-        checkout scm
-        sh 'git rev-parse --abbrev-ref HEAD && git log -1 --oneline || true'
+        // ✅ Wrapper de colores por stage
+        ansiColor('xterm') {
+          checkout scm
+          // Trazabilidad del código
+          sh 'git rev-parse --abbrev-ref HEAD && git log -1 --oneline || true'
+        }
       }
     }
 
     stage('GCloud Auth') {
       steps {
-        withCredentials([file(credentialsId: 'gcp-sa-key', variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
-          sh '''
-            set -e
-            gcloud auth activate-service-account --key-file="$GOOGLE_APPLICATION_CREDENTIALS"
-            gcloud config set project "$PROJECT_ID"
-            gcloud --quiet auth configure-docker "$REGISTRY_HOST"
-          '''
+        ansiColor('xterm') {
+          withCredentials([file(credentialsId: 'gcp-sa-key', variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
+            sh '''
+              set -e
+              # Autenticar service account
+              gcloud auth activate-service-account --key-file="$GOOGLE_APPLICATION_CREDENTIALS"
+
+              # Definir proyecto
+              gcloud config set project "$PROJECT_ID"
+
+              # Habilitar push a Artifact Registry en el host de la región
+              gcloud --quiet auth configure-docker "$REGISTRY_HOST"
+            '''
+          }
         }
       }
     }
 
     stage('Build & Push Image') {
       steps {
-        dir('api') {
-          script {
-            def COMMIT = sh(returnStdout: true, script: 'git rev-parse --short HEAD').trim()
-            env.IMAGE        = "$REGION-docker.pkg.dev/$PROJECT_ID/$REPO_NAME/$SERVICE_NAME:$COMMIT"
-            env.IMAGE_LATEST = "$REGION-docker.pkg.dev/$PROJECT_ID/$REPO_NAME/$SERVICE_NAME:latest"
+        ansiColor('xterm') {
+          // Si tu Dockerfile está en api/, mantenemos este dir(); si está en la raíz, quita este bloque dir('api'){...}
+          dir('api') {
+            script {
+              // Tag con hash corto del commit
+              def COMMIT = sh(returnStdout: true, script: 'git rev-parse --short HEAD').trim()
+              env.IMAGE        = "$REGION-docker.pkg.dev/$PROJECT_ID/$REPO_NAME/$SERVICE_NAME:$COMMIT"
+              env.IMAGE_LATEST = "$REGION-docker.pkg.dev/$PROJECT_ID/$REPO_NAME/$SERVICE_NAME:latest"
+            }
+            sh '''
+              set -e
+              # Construcción con dos tags
+              docker build -t "$IMAGE" -t "$IMAGE_LATEST" .
+
+              # Push de ambas etiquetas
+              docker push "$IMAGE"
+              docker push "$IMAGE_LATEST"
+            '''
           }
-          sh '''
-            set -e
-            # Construir con dos tags
-            docker build -t "$IMAGE" -t "$IMAGE_LATEST" .
-            # Push de ambas etiquetas
-            docker push "$IMAGE"
-            docker push "$IMAGE_LATEST"
-          '''
         }
       }
     }
 
     stage('Deploy to Cloud Run') {
       steps {
-        sh '''
-          set -e
-          # Despliegue (sin comentarios al final de líneas con '\')
-          gcloud run deploy "$SERVICE_NAME" \
-            --image "$IMAGE" \
-            --platform managed \
-            --region "$REGION" \
-            --allow-unauthenticated \
-            --port 8000
-        '''
+        ansiColor('xterm') {
+          sh '''
+            set -e
+            # Despliegue (evitar comentarios al final de líneas con '\')
+            gcloud run deploy "$SERVICE_NAME" \
+              --image "$IMAGE" \
+              --platform managed \
+              --region "$REGION" \
+              --allow-unauthenticated \
+              --port 8000
+          '''
+        }
       }
     }
 
     stage('Smoke Test') {
       steps {
-        script {
-          def URL = sh(
-            returnStdout: true,
-            script: "gcloud run services describe \"$SERVICE_NAME\" --region \"$REGION\" --format='value(status.url)'"
-          ).trim()
-          echo "Service URL: ${URL}"
-          sh """
-            set -e
-            # pequeño delay para arranque en frío
-            sleep 5
-            # prueba de salud con reintentos
-            curl -fsSL --retry 5 --retry-delay 2 "${URL}/healthz" > /dev/null
-          """
+        ansiColor('xterm') {
+          script {
+            // Obtener URL pública del servicio
+            def URL = sh(
+              returnStdout: true,
+              script: "gcloud run services describe \"$SERVICE_NAME\" --region \"$REGION\" --format='value(status.url)'"
+            ).trim()
+            echo "Service URL: ${URL}"
+
+            sh """
+              set -e
+              # Esperar por arranque en frío
+              sleep 5
+              # Health check con reintentos
+              curl -fsSL --retry 5 --retry-delay 2 "${URL}/healthz" > /dev/null
+            """
+          }
         }
       }
     }
@@ -93,16 +121,20 @@ pipeline {
 
   post {
     success {
-      script {
-        def url = sh(
-          returnStdout: true,
-          script: "gcloud run services describe \"$SERVICE_NAME\" --region \"$REGION\" --format='value(status.url)'"
-        ).trim()
-        echo "✅ Despliegue exitoso: ${url}"
+      ansiColor('xterm') {
+        script {
+          def url = sh(
+            returnStdout: true,
+            script: "gcloud run services describe \"$SERVICE_NAME\" --region \"$REGION\" --format='value(status.url)'"
+          ).trim()
+          echo "✅ Despliegue exitoso: ${url}"
+        }
       }
     }
     failure {
-      echo "❌ Pipeline falló. Revisa logs."
+      ansiColor('xterm') {
+        echo "❌ Pipeline falló. Revisa logs."
+      }
     }
   }
 }
