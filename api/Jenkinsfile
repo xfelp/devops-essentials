@@ -1,8 +1,9 @@
 // Jenkinsfile (api/Jenkinsfile)
 // Correcciones clave:
-// 1) NO usar ansiColor en options{} -> mover a wrapper de steps: ansiColor('xterm') { ... }
-// 2) Mantener comentarios fuera de líneas que terminan en '\' (bash)
-// 3) Usar $VAR (shell) dentro de sh ''' ... ''' para evitar interpolación Groovy accidental
+// 1) NO usar ansiColor en options{} -> usarlo como wrapper en steps: ansiColor('xterm') { ... }
+// 2) Evitar comentarios al final de líneas con '\' en comandos bash.
+// 3) Usar $VAR (shell) dentro de sh ''' ... ''' para evitar interpolación Groovy accidental.
+// 4) Smoke Test robusto: prueba /healthz, /healthz/, /ping y /; acepta 2xx/3xx y hace diagnóstico si falla.
 
 pipeline {
   agent any
@@ -105,14 +106,14 @@ pipeline {
               script: "gcloud run services describe \"$SERVICE_NAME\" --region \"$REGION\" --format='value(status.url)'"
             ).trim()
             echo "Service URL: ${URL}"
-    
+
             // Probaremos varios paths y aceptaremos 2xx/3xx
             def paths = ['/healthz', '/healthz/', '/ping', '/']
             def ok = false
-    
+
             for (p in paths) {
-              // -f: falla en >=400 ; -sS: silencioso pero muestra errores ; -L: sigue redirects ; -o /dev/null: no imprime body
-              // Usamos "|| true" para que Jenkins no reviente el loop ante un 404
+              // -s: silencioso ; -o /dev/null: no imprime body ; -w '%{http_code}': muestra solo el código ; -L: sigue redirects
+              // "|| true" evita que un 404 reviente el loop completo
               def code = sh(returnStdout: true, script: "curl -s -o /dev/null -w '%{http_code}' -L \"${URL}${p}\" || true").trim()
               echo "Probing ${URL}${p} -> HTTP ${code}"
               if (code.startsWith('2') || code.startsWith('3')) {
@@ -121,7 +122,7 @@ pipeline {
                 break
               }
             }
-    
+
             if (!ok) {
               // Diagnóstico: imprime cabeceras + primeras líneas del body de /healthz y /
               sh """
@@ -132,7 +133,7 @@ pipeline {
                 curl -i -L "${URL}/" || true
               """
               error("Smoke Test: ninguna ruta respondió 2xx/3xx")
-
+            }
           }
         }
       }
