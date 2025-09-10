@@ -1,0 +1,7 @@
+
+# Terraform (no versionar estado/artefactos locales)
+**/.terraform/
+**/*.tfstate*
+**/crash.log
+**/*.tfvars
+**/*.tfvars.json
