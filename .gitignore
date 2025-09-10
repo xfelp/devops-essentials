@@ -1,0 +1,5 @@
+
+# GCP keys
+jenkins-sa-key.json
+*service-account*.json
+*sa-key*.json
