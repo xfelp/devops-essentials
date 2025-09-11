@@ -53,11 +53,14 @@ resource "google_service_account" "jenkins_sa" {
 # Permisos para la Service Account de Jenkins
 resource "google_project_iam_member" "jenkins_permissions" {
   for_each = toset([
-    "roles/run.admin",                    # Administrar Cloud Run
-    "roles/artifactregistry.writer",     # Escribir en Artifact Registry
-    "roles/artifactregistry.reader",     # Leer de Artifact Registry  
-    "roles/iam.serviceAccountUser",      # Usar service accounts
-    "roles/cloudbuild.builds.builder"    # Construir imágenes
+    "roles/run.admin",                      # Administrar Cloud Run
+    "roles/artifactregistry.writer",       # Escribir en Artifact Registry
+    "roles/artifactregistry.reader",       # Leer de Artifact Registry  
+    "roles/iam.serviceAccountUser",        # Usar service accounts
+    "roles/cloudbuild.builds.builder",    # Construir imágenes
+    "roles/storage.admin",                 # Acceso a Cloud Storage (logs, artifacts)
+    "roles/logging.logWriter",             # Escribir logs
+    "roles/monitoring.metricWriter"        # Escribir métricas
   ])
   
   project = var.project_id
