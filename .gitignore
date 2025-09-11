@@ -3,3 +3,10 @@
 jenkins-sa-key.json
 *service-account*.json
 *sa-key*.json
+
+# Terraform
+**/.terraform/
+**/*.tfstate*
+**/crash.log
+**/*.tfvars
+**/*.tfvars.json
