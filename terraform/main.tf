@@ -22,7 +22,8 @@ resource "google_project_service" "required_apis" {
     "compute.googleapis.com",
     "artifactregistry.googleapis.com", 
     "run.googleapis.com",
-    "cloudbuild.googleapis.com"
+    "cloudbuild.googleapis.com",
+    "iam.googleapis.com"
   ])
   
   project = var.project_id
@@ -166,6 +167,10 @@ resource "google_compute_instance" "jenkins_vm" {
       # Instalar herramientas adicionales
       apt-get install -y git curl wget unzip tree
       
+      # Instalar plugin AnsiColor para Jenkins (opcional, mejora visualización)
+      # Este plugin permite que Jenkins muestre colores en la consola
+      wget -O /tmp/ansicolor.hpi https://updates.jenkins.io/download/plugins/ansicolor/latest/ansicolor.hpi || true
+      
       # Crear script para mostrar información útil
       cat > /home/jenkins/info.sh << 'EOF'
 #!/bin/bash
@@ -173,6 +178,15 @@ echo "=== Información del servidor Jenkins ==="
 echo "URL de Jenkins: http://$(curl -s http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip -H "Metadata-Flavor: Google"):8080"
 echo "Contraseña inicial de Jenkins:"
 sudo cat /var/lib/jenkins/secrets/initialAdminPassword
+echo ""
+echo "=== Service Account configurada ==="
+gcloud config list
+echo ""
+echo "=== Docker status ==="
+sudo systemctl status docker --no-pager
+echo ""
+echo "=== Jenkins status ==="
+sudo systemctl status jenkins --no-pager
 EOF
       chmod +x /home/jenkins/info.sh
       chown jenkins:jenkins /home/jenkins/info.sh
